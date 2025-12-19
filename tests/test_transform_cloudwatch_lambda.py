@@ -53,15 +53,23 @@ class TestLambdaHandler:
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
 
-        s3 = boto3.client('s3',dummy_region)
+        s3 = boto3.client("s3", dummy_region)
         stubber = Stubber(s3)
         bucket_name = "test-bucket"
-        key = f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
+        key = (
+            f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
+        )
         body = "This is a test file."
 
         # Define the expected parameters and the mocked response for put_object
-        expected_params = {"Bucket": bucket_name, "Key": key, "Body": body.encode('utf-8')}
-        stubber.add_response("put_object", {}, expected_params)  # Empty response for success
+        expected_params = {
+            "Bucket": bucket_name,
+            "Key": key,
+            "Body": body.encode("utf-8"),
+        }
+        stubber.add_response(
+            "put_object", {}, expected_params
+        )  # Empty response for success
 
         # Activate the stubber (very important!)
         stubber.activate()
@@ -115,15 +123,19 @@ class TestLambdaHandler:
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
 
-        s3 = boto3.client('s3',dummy_region)
+        s3 = boto3.client("s3", dummy_region)
         stubber = Stubber(s3)
         bucket_name = "test-bucket"
-        key = f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
+        key = (
+            f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
+        )
         body = "This is a test file."
-        compressed_data = gzip.compress(body.encode('utf-8'))
+        compressed_data = gzip.compress(body.encode("utf-8"))
         # Define the expected parameters and the mocked response for put_object
         expected_params = {"Bucket": bucket_name, "Key": key, "Body": compressed_data}
-        stubber.add_response("put_object", {}, expected_params)  # Empty response for success
+        stubber.add_response(
+            "put_object", {}, expected_params
+        )  # Empty response for success
 
         # Activate the stubber (very important!)
         stubber.activate()

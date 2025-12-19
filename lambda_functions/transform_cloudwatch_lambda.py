@@ -24,7 +24,9 @@ def lambda_handler(event, context):
     try:
         region = boto3.Session().region_name or os.environ.get("AWS_REGION")
         if not region:
-            raise ValueError("AWS_REGION environment variable or session region is required")
+            raise ValueError(
+                "AWS_REGION environment variable or session region is required"
+            )
         bucket = os.environ.get("S3_BUCKET_NAME")
         if not bucket:
             logger.error("S3_BUCKET_NAME environment variable not set.")
@@ -34,18 +36,18 @@ def lambda_handler(event, context):
             raise ValueError("ACCOUNT_ID environment variable is required")
 
         rds_prefix = make_prefixes()  # Fetch prefix based on environment
-        
+
         # Initialize clients
         s3_client = boto3.client("s3", region_name=region)
         rds_client = boto3.client("rds", region_name=region)
-            
+
     except ValueError as e:
         logger.error(f"Configuration error: {str(e)}")
         return {"records": []}  # Fail processing if initialization fails
     except Exception as e:
         logger.error(f"Initialization error: {str(e)}")
         return {"records": []}
-    
+
     for record in event["records"]:
         try:
             # Decode and decompress the CloudWatch Logs data
@@ -71,7 +73,7 @@ def lambda_handler(event, context):
                 output_record = {
                     "recordId": record["recordId"],
                     "result": "Ok",
-                    'data': base64.b64encode(b'').decode('utf-8')  # Empty data
+                    "data": base64.b64encode(b"").decode("utf-8"),  # Empty data
                 }
                 output_records.append(output_record)
             else:
@@ -98,19 +100,20 @@ def lambda_handler(event, context):
         try:
             # Convert logs to newline-delimited JSON
             buffer = io.BytesIO()
-            with gzip.GzipFile(fileobj=buffer, mode='wb') as gz_file:
+            with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_file:
                 for log in s3_output:
-                    gz_file.write((json.dumps(log) + '\n').encode('utf-8'))
+                    gz_file.write((json.dumps(log) + "\n").encode("utf-8"))
             compressed_data = buffer.getvalue()
             s3_key = f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
             s3_client.put_object(
                 Bucket=bucket,
                 Key=s3_key,
                 Body=compressed_data,
-                ContentType='application/gzip',
-                ContentEncoding='gzip'
+                ContentType="application/gzip",
+                ContentEncoding="gzip",
+                ServerSideEncryption="AES256",
             )
-            
+
             logger.info(f"Successfully pushed {len(s3_output)} logs to S3: {s3_key}")
 
         except Exception as e:
@@ -169,6 +172,7 @@ def process_logs(logs, client, region, account_id, rds_prefix):
         return None
     return return_logs
 
+
 def get_resource_tags_from_log(
     resource_name, client, region, account_id, rds_prefix
 ) -> dict:
@@ -183,7 +187,6 @@ def get_resource_tags_from_log(
     except Exception as e:
         logger.error(f"Error getting tags for resource {resource_name}: {e}")
     return tags
-
 
 
 @lru_cache(maxsize=256)

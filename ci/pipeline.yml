@@ -9,7 +9,7 @@ jobs:
   - set_pipeline: self
     file: src/ci/pipeline.yml
 
-- name: test-metric-lambda
+- name: test-lambda
   plan:
     - in_parallel:
       - get: src
