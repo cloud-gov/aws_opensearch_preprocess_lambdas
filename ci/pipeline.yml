@@ -9,7 +9,7 @@ jobs:
   - set_pipeline: self
     file: src/ci/pipeline.yml
 
-- name: test-metric-lambda
+- name: test-lambda
   plan:
     - in_parallel:
       - get: src
@@ -40,7 +40,7 @@ resources:
   check_every: 10s
   source:
     uri: git@github.com:cloud-gov/aws_opensearch_preprocess_lambdas.git
-    branch: main
+    branch: lambda-pipeline
     commit_verification_keys: ((cloud-gov-pgp-keys))
     private_key: ((cg-ci-bot-sshkey.private_key))
 
