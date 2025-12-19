@@ -40,7 +40,7 @@ resources:
   check_every: 10s
   source:
     uri: git@github.com:cloud-gov/aws_opensearch_preprocess_lambdas.git
-    branch: lambda-pipeline
+    branch: main
     commit_verification_keys: ((cloud-gov-pgp-keys))
     private_key: ((cg-ci-bot-sshkey.private_key))
 
