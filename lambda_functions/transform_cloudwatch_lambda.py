@@ -108,7 +108,8 @@ def lambda_handler(event, context):
                 Key=s3_key,
                 Body=compressed_data,
                 ContentType='application/gzip',
-                ContentEncoding='gzip'
+                ContentEncoding='gzip',
+                ServerSideEncryption='AES256'
             )
             
             logger.info(f"Successfully pushed {len(s3_output)} logs to S3: {s3_key}")
