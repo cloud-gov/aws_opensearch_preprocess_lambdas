@@ -10,11 +10,11 @@ black==25.11.0
     # via -r pip-tools/dev-requirements.in
 boto3==1.42.13
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   moto
 botocore==1.42.13
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   boto3
     #   moto
     #   s3transfer
@@ -48,7 +48,7 @@ jinja2==3.1.6
     # via moto
 jmespath==1.0.1
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   boto3
     #   botocore
 markdown-it-py==3.0.0
@@ -99,7 +99,7 @@ pytest-mock==3.15.1
     # via -r pip-tools/dev-requirements.in
 python-dateutil==2.9.0.post0
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   botocore
     #   moto
 pytokens==0.3.0
@@ -121,11 +121,11 @@ rich==14.2.0
     # via bandit
 s3transfer==0.16.0
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   boto3
 six==1.17.0
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   python-dateutil
 stevedore==5.5.0
     # via bandit
@@ -144,7 +144,7 @@ typing-extensions==4.15.0
     #   exceptiongroup
 urllib3==1.26.20
     # via
-    #   -r requirements.txt
+    #   -r pip-tools/../requirements.txt
     #   botocore
     #   requests
     #   responses
