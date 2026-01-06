@@ -70,6 +70,7 @@ def lambda_handler(event, context):
             logger.info(f"Processed record with {len(processed_metrics)} metrics")
     except Exception as e:
         logger.error(f"Error processing metrics: {str(e)}")
+        raise e
     return {"records": output_records}
 
 
