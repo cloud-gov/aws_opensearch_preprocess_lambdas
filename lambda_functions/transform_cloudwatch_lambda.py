@@ -115,9 +115,9 @@ def lambda_handler(event, context):
             )
 
             logger.info(f"Successfully pushed {len(s3_output)} logs to S3: {s3_key}")
-
         except Exception as e:
-            logger.error(f"Failed to push final batch to S3: {str(e)}")
+            logger.error(f"Unexpected error pushing to S3: {str(e)}")
+            raise(e)
     return {"records": output_records}
 
 
