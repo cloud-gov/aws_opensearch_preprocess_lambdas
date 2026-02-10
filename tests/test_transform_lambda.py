@@ -622,7 +622,7 @@ class TestLambdaHandler:
                 123456,
             )
 
-        # if tags are returned environment is correct
+        # if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     @pytest.mark.parametrize(
