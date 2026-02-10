@@ -708,7 +708,6 @@ class TestLambdaHandler:
                 123456,
             )
         # if tags are returned environment is correct
-        print(result)
         assert result["Environment"] == environment
         assert result["Testing"] == "enabled"
         assert result["Organization GUID"] == "cloudgovtests"
@@ -795,7 +794,7 @@ class TestLambdaHandler:
                 123456,
             )
 
-        # if tags are returned environment is correct
+        # if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     @pytest.mark.parametrize(
@@ -973,7 +972,7 @@ class TestLambdaHandler:
                 123456,
             )
 
-        # if tags are returned environment is correct
+        # if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     @pytest.mark.parametrize(
@@ -1158,7 +1157,7 @@ class TestLambdaHandler:
                 123456,
             )
 
-        # if tags are returned environment is correct
+        ## if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     def test_s3_tag_retrieval(self, monkeypatch):
