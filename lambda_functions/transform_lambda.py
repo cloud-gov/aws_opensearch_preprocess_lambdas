@@ -118,7 +118,6 @@ def process_metric(
     account_id,
 ):
     try:
-        print(12324)
         namespace = metric.get("namespace")
         if namespace not in EXPECTED_NAMESPACES:
             logger.error(
