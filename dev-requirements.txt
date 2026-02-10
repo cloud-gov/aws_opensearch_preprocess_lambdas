@@ -68,6 +68,7 @@ packaging==25.0
     #   black
     #   build
     #   pytest
+    #   wheel
 pathspec==0.12.1
     # via black
 pip-tools==7.5.2
@@ -150,7 +151,7 @@ urllib3==1.26.20
     #   responses
 werkzeug==3.1.4
     # via moto
-wheel==0.45.1
+wheel==0.46.2
     # via pip-tools
 xmltodict==1.0.2
     # via moto
