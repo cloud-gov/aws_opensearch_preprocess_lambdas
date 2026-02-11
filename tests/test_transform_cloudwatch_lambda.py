@@ -1,6 +1,6 @@
 import json
 import base64
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 import gzip
 from botocore.stub import Stubber
 import boto3
@@ -36,50 +36,38 @@ class TestLambdaHandler:
                 },
             ],
         }
-
         mock_tags = {"Environment": "production", "Owner": "team-alpha"}
-
         # Create newline-delimited JSON
         ndjson_data = json.dumps(log_data) + "\n"
         compressed_data = gzip.compress(ndjson_data.encode("utf-8"))
         encoded_data = base64.b64encode(compressed_data).decode("utf-8")
-
         event = {"records": [{"recordId": "test-record-1", "data": encoded_data}]}
-
         context = MagicMock()
-
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
 
-        s3 = boto3.client("s3", dummy_region)
-        stubber = Stubber(s3)
-        bucket_name = "test-bucket"
-        key = (
-            f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
-        )
-        body = "This is a test file."
-
-        # Define the expected parameters and the mocked response for put_object
-        expected_params = {
-            "Bucket": bucket_name,
-            "Key": key,
-            "Body": body.encode("utf-8"),
-        }
-        stubber.add_response(
-            "put_object", {}, expected_params
-        )  # Empty response for success
-
-        # Activate the stubber (very important!)
-        stubber.activate()
+        # Mock the S3 client completely - simpler approach
+        mock_s3_client = MagicMock()
+        mock_s3_client.put_object.return_value = {}
 
         with patch("lambda_functions.transform_cloudwatch_lambda.logger"), patch(
             "lambda_functions.transform_cloudwatch_lambda.get_resource_tags_from_log",
             return_value=mock_tags,
-        ):
-            # Set up the mock return value
+        ), patch("boto3.client", return_value=mock_s3_client):
             result = lambda_handler(event, context)
+
+        # Verify S3 put_object was called with correct parameters
+        mock_s3_client.put_object.assert_called_once()
+        call_args = mock_s3_client.put_object.call_args[1]
+        assert call_args["Bucket"] == "test-bucket"
+        assert call_args["ContentType"] == "application/gzip"
+        assert call_args["ContentEncoding"] == "gzip"
+        assert call_args["ServerSideEncryption"] == "AES256"
+        assert call_args["Key"].endswith(".json.gz")  # Verify key format
+        assert isinstance(call_args["Body"], bytes)  # Verify body is compressed bytes
+
         # Assertions
         assert "records" in result
         assert len(result["records"]) == 1
@@ -123,28 +111,22 @@ class TestLambdaHandler:
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
 
-        s3 = boto3.client("s3", dummy_region)
-        stubber = Stubber(s3)
-        bucket_name = "test-bucket"
-        key = (
-            f"{datetime.now().strftime('%Y/%m/%d/%H')}/batch-{int(time.time())}.json.gz"
-        )
-        body = "This is a test file."
-        compressed_data = gzip.compress(body.encode("utf-8"))
-        # Define the expected parameters and the mocked response for put_object
-        expected_params = {"Bucket": bucket_name, "Key": key, "Body": compressed_data}
-        stubber.add_response(
-            "put_object", {}, expected_params
-        )  # Empty response for success
-
-        # Activate the stubber (very important!)
-        stubber.activate()
+        # Mock the S3 client completely
+        mock_s3_client = MagicMock()
+        mock_s3_client.put_object.return_value = {}
 
         with patch("lambda_functions.transform_cloudwatch_lambda.logger"), patch(
             "lambda_functions.transform_cloudwatch_lambda.get_resource_tags_from_log",
             return_value=mock_tags,
-        ):
+        ), patch("boto3.client", return_value=mock_s3_client):
             result = lambda_handler(event, context)
+
+        # Verify put_object was called with correct bucket
+        mock_s3_client.put_object.assert_called_once()
+        call_args = mock_s3_client.put_object.call_args[1]
+        assert call_args["Bucket"] == "test-bucket"
+        assert call_args["ContentType"] == "application/gzip"
+        assert call_args["ServerSideEncryption"] == "AES256"
 
         assert len(result["records"]) == 1
         assert result["records"][0]["result"] == "Ok"

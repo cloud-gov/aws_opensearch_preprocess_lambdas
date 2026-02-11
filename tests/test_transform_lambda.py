@@ -307,7 +307,7 @@ class TestLambdaHandler:
 
     def test_lambda_handler_malformed_json(self, monkeypatch):
         """Test handling of malformed JSON"""
-        malformed_data = "{'invalid': json}"  # Not valid JSON
+        malformed_data = '{"invalid": "json"'  # Not valid JSON
         encoded_data = base64.b64encode(malformed_data.encode("utf-8")).decode("utf-8")
 
         event = {"records": [{"recordId": "malformed-record", "data": encoded_data}]}
@@ -317,10 +317,9 @@ class TestLambdaHandler:
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         with patch("lambda_functions.transform_lambda.logger") as mock_logger:
-            result = lambda_handler(event, context)
+            with pytest.raises(json.JSONDecodeError):
+                lambda_handler(event, context)
 
-        # Should handle gracefully and return empty records
-        assert len(result["records"]) == 0
         mock_logger.error.assert_called()
 
     def test_process_metric_valid(self, monkeypatch):
@@ -342,7 +341,7 @@ class TestLambdaHandler:
             return_value=mock_tags,
         ):
             result = process_metric(
-                input_metric, dummy_region, "", "", "", "", "", "", 123456
+                input_metric, dummy_region, "", "", "", "", "", "", "", "", 123456
             )
 
         assert result is not None
@@ -363,7 +362,7 @@ class TestLambdaHandler:
         }
 
         result = process_metric(
-            invalid_metric, dummy_region, "", "", "", "", "", "", 123456
+            invalid_metric, dummy_region, "", "", "", "", "", "", "", "", 123456
         )
         assert result is None
 
@@ -375,7 +374,7 @@ class TestLambdaHandler:
         }
 
         result2 = process_metric(
-            invalid_metric2, dummy_region, "", "", "", "", "", "", 123456
+            invalid_metric2, dummy_region, "", "", "", "", "", "", "", "", 123456
         )
         assert result2 is None
 
@@ -389,7 +388,7 @@ class TestLambdaHandler:
         }
 
         result = process_metric(
-            invalid_namespace, dummy_region, "", "", "", "", "", "", 123456
+            invalid_namespace, dummy_region, "", "", "", "", "", "", "", "", 123456
         )
         assert result is None
 
@@ -401,7 +400,7 @@ class TestLambdaHandler:
         }
 
         result2 = process_metric(
-            invalid_metric2, dummy_region, "", "", "", "", "", "", 123456
+            invalid_metric2, dummy_region, "", "", "", "", "", "", "", "", 123456
         )
         assert result2 is None
 
@@ -447,15 +446,25 @@ class TestLambdaHandler:
         assert "OtherDim" in output_metric["dimensions"]
 
     @pytest.mark.parametrize(
-        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix",
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix, expected_redis_prefix",
         [
             pytest.param(
-                "development", "development-cg-", "cg-broker-dev-", "cg-aws-broker-dev"
+                "development",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
             ),
             pytest.param(
-                "staging", "staging-cg-", "cg-broker-stg-", "cg-aws-broker-stage"
+                "staging",
+                "staging-cg-",
+                "cg-broker-stg-",
+                "cg-aws-broker-stage",
+                "stg-",
             ),
-            pytest.param("production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
+            pytest.param(
+                "production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
         ],
     )
     def test_get_resource_tags_from_metric_es_success(
@@ -465,15 +474,17 @@ class TestLambdaHandler:
         expected_s3_prefix,
         expected_domain_prefix,
         expected_rds_prefix,
+        expected_redis_prefix,
     ):
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", environment)
 
-        rds_prefix, s3_prefix, domain_prefix = make_prefixes()
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
         assert s3_prefix == expected_s3_prefix
         assert domain_prefix == expected_domain_prefix
         assert rds_prefix == expected_rds_prefix
+        assert redis_prefix == expected_redis_prefix
 
         """Test that environment only accepts environment prefix when correct environment"""
         metric_data = {
@@ -517,6 +528,8 @@ class TestLambdaHandler:
                 expected_domain_prefix,
                 "",
                 "",
+                "",
+                "",
                 123456,
             )
 
@@ -526,12 +539,20 @@ class TestLambdaHandler:
         assert result["Organization GUID"] == "cloudgovtests"
 
     @pytest.mark.parametrize(
-        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix",
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
         [
-            pytest.param("development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
-            pytest.param("staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
             pytest.param(
-                "production", "development-cg-", "cg-broker-dev-", "cg-aws-broker-dev"
+                "development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+            pytest.param(
+                "staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+            pytest.param(
+                "production",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
             ),
         ],
     )
@@ -542,15 +563,17 @@ class TestLambdaHandler:
         expected_s3_prefix,
         expected_domain_prefix,
         expected_rds_prefix,
+        expected_redis_prefix,
     ):
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", environment)
 
-        rds_prefix, s3_prefix, domain_prefix = make_prefixes()
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
         assert s3_prefix != expected_s3_prefix
         assert domain_prefix != expected_domain_prefix
         assert rds_prefix != expected_rds_prefix
+        assert redis_prefix != expected_redis_prefix
 
         """Test that environment will not accept the wrong prefix if wrong environment"""
         metric_data = {
@@ -594,22 +617,206 @@ class TestLambdaHandler:
                 expected_domain_prefix,
                 "",
                 "",
+                "",
+                "",
                 123456,
             )
 
-        # if tags are returned environment is correct
+        # if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     @pytest.mark.parametrize(
-        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix",
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
         [
             pytest.param(
-                "development", "development-cg-", "cg-broker-dev-", "cg-aws-broker-dev"
+                "development",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
             ),
             pytest.param(
-                "staging", "staging-cg-", "cg-broker-stg-", "cg-aws-broker-stage"
+                "staging",
+                "staging-cg-",
+                "cg-broker-stg-",
+                "cg-aws-broker-stage",
+                "stg-",
             ),
-            pytest.param("production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
+            pytest.param(
+                "production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+        ],
+    )
+    def test_get_resource_tags_from_metric_redis_success(
+        self,
+        monkeypatch,
+        environment,
+        expected_s3_prefix,
+        expected_domain_prefix,
+        expected_rds_prefix,
+        expected_redis_prefix,
+    ):
+        monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
+        monkeypatch.setenv("ACCOUNT_ID", "123456")
+        monkeypatch.setenv("ENVIRONMENT", environment)
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
+        assert s3_prefix == expected_s3_prefix
+        assert domain_prefix == expected_domain_prefix
+        assert rds_prefix == expected_rds_prefix
+        assert redis_prefix == expected_redis_prefix
+        """Test that environment only accepts environment prefix when correct environment"""
+        metric_data = {
+            "timestamp": 1640995200000,
+            "namespace": "AWS/ElastiCache",
+            "metric_name": "TestMetric",
+            "dimensions": {
+                "CacheClusterId": f"{redis_prefix}jason-test",
+                "ClientId": 123456,
+            },
+            "value": 100,
+        }
+        # Create a stubbed elasticache client
+        elasticache_client = boto3.client("elasticache", region_name=dummy_region)
+        stubber = Stubber(elasticache_client)
+        fake_arn = f"arn:aws-us-gov:elasticache:us-gov-west-1:{metric_data['dimensions']['ClientId']}:cluster:{metric_data['dimensions']['CacheClusterId']}"
+        fake_tags = {
+            "TagList": [
+                {"Key": "Environment", "Value": environment},
+                {"Key": "Testing", "Value": "enabled"},
+                {"Key": "Organization GUID", "Value": "cloudgovtests"},
+            ]
+        }
+        expected_param_for_stub = {"ResourceName": fake_arn}
+        stubber.add_response(
+            "list_tags_for_resource", fake_tags, expected_param_for_stub
+        )
+        stubber.activate()
+        with patch("lambda_functions.transform_lambda.logger"), patch(
+            "boto3.client", return_value=elasticache_client
+        ):
+            result = get_resource_tags_from_metric(
+                metric_data,
+                dummy_region,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                elasticache_client,
+                redis_prefix,
+                123456,
+            )
+        # if tags are returned environment is correct
+        assert result["Environment"] == environment
+        assert result["Testing"] == "enabled"
+        assert result["Organization GUID"] == "cloudgovtests"
+
+    @pytest.mark.parametrize(
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
+        [
+            pytest.param(
+                "development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+            pytest.param(
+                "staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+            pytest.param(
+                "production",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
+            ),
+        ],
+    )
+    def test_get_resource_tags_from_metric_redis_failure(
+        self,
+        monkeypatch,
+        environment,
+        expected_s3_prefix,
+        expected_domain_prefix,
+        expected_rds_prefix,
+        expected_redis_prefix,
+    ):
+        monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
+        monkeypatch.setenv("ACCOUNT_ID", "123456")
+        monkeypatch.setenv("ENVIRONMENT", environment)
+
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
+        assert s3_prefix != expected_s3_prefix
+        assert domain_prefix != expected_domain_prefix
+        assert rds_prefix != expected_rds_prefix
+        assert redis_prefix != expected_redis_prefix
+
+        """Test that environment only accepts environment prefix when correct environment"""
+        metric_data = {
+            "timestamp": 1640995200000,
+            "namespace": "AWS/ElastiCache",
+            "metric_name": "TestMetric",
+            "dimensions": {
+                "CacheClusterId": f"{expected_redis_prefix}jason-test",
+                "ClientId": 123456,
+            },
+            "value": 100,
+        }
+        # Create a stubbed elasticache client
+        elasticache_client = boto3.client("elasticache", region_name=dummy_region)
+        stubber = Stubber(elasticache_client)
+        fake_arn = f"arn:aws-us-gov:elasticache:us-gov-west-1:{metric_data['dimensions']['ClientId']}:cluster:{metric_data['dimensions']['CacheClusterId']}"
+        fake_tags = {
+            "TagList": [
+                {"Key": "Environment", "Value": environment},
+                {"Key": "Testing", "Value": "enabled"},
+                {"Key": "Organization GUID", "Value": "cloudgovtests"},
+            ]
+        }
+        expected_param_for_stub = {"ResourceName": fake_arn}
+        stubber.add_response(
+            "list_tags_for_resource", fake_tags, expected_param_for_stub
+        )
+        stubber.activate()
+
+        with patch("lambda_functions.transform_lambda.logger"), patch(
+            "boto3.client", return_value=elasticache_client
+        ):
+            result = get_resource_tags_from_metric(
+                metric_data,
+                dummy_region,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                elasticache_client,
+                redis_prefix,
+                123456,
+            )
+
+        # if tags are returned empty environment mismatch does not return tags
+        assert result == {}
+
+    @pytest.mark.parametrize(
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
+        [
+            pytest.param(
+                "development",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
+            ),
+            pytest.param(
+                "staging",
+                "staging-cg-",
+                "cg-broker-stg-",
+                "cg-aws-broker-stage",
+                "stg-",
+            ),
+            pytest.param(
+                "production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
         ],
     )
     def test_get_resource_tags_from_metric_s3_success(
@@ -619,15 +826,17 @@ class TestLambdaHandler:
         expected_s3_prefix,
         expected_domain_prefix,
         expected_rds_prefix,
+        expected_redis_prefix,
     ):
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", environment)
 
-        rds_prefix, s3_prefix, domain_prefix = make_prefixes()
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
         assert s3_prefix == expected_s3_prefix
         assert domain_prefix == expected_domain_prefix
         assert rds_prefix == expected_rds_prefix
+        assert redis_prefix == expected_redis_prefix
 
         """Test that environment only accepts environment prefix that match environment"""
         metric_data = {
@@ -662,7 +871,17 @@ class TestLambdaHandler:
             "boto3.client", return_value=s3_client
         ):
             result = get_resource_tags_from_metric(
-                metric_data, dummy_region, s3_client, s3_prefix, "", "", "", "", 123456
+                metric_data,
+                dummy_region,
+                s3_client,
+                s3_prefix,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                123456,
             )
 
         # if tags are returned environment is correct
@@ -671,12 +890,20 @@ class TestLambdaHandler:
         assert result["Organization GUID"] == "cloudgovtests"
 
     @pytest.mark.parametrize(
-        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix",
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
         [
-            pytest.param("development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
-            pytest.param("staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
             pytest.param(
-                "production", "development-cg-", "cg-broker-dev-", "cg-aws-broker-dev"
+                "development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+            pytest.param(
+                "staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
+            pytest.param(
+                "production",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
             ),
         ],
     )
@@ -687,15 +914,17 @@ class TestLambdaHandler:
         expected_s3_prefix,
         expected_domain_prefix,
         expected_rds_prefix,
+        expected_redis_prefix,
     ):
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", environment)
 
-        rds_prefix, s3_prefix, domain_prefix = make_prefixes()
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
         assert s3_prefix != expected_s3_prefix
         assert domain_prefix != expected_domain_prefix
         assert rds_prefix != expected_rds_prefix
+        assert redis_prefix != expected_redis_prefix
 
         """Test that environment only accepts environment prefix that match environment"""
         metric_data = {
@@ -730,22 +959,42 @@ class TestLambdaHandler:
             "boto3.client", return_value=s3_client
         ):
             result = get_resource_tags_from_metric(
-                metric_data, dummy_region, s3_client, s3_prefix, "", "", "", "", 123456
+                metric_data,
+                dummy_region,
+                s3_client,
+                s3_prefix,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                123456,
             )
 
-        # if tags are returned environment is correct
+        # if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     @pytest.mark.parametrize(
-        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix",
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
         [
             pytest.param(
-                "development", "development-cg-", "cg-broker-dev-", "cg-aws-broker-dev"
+                "development",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev-",
             ),
             pytest.param(
-                "staging", "staging-cg-", "cg-broker-stg-", "cg-aws-broker-stage"
+                "staging",
+                "staging-cg-",
+                "cg-broker-stg-",
+                "cg-aws-broker-stage",
+                "stg-",
             ),
-            pytest.param("production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
+            pytest.param(
+                "production", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd-"
+            ),
         ],
     )
     def test_get_resource_tags_from_metric_rds_success(
@@ -755,16 +1004,18 @@ class TestLambdaHandler:
         expected_s3_prefix,
         expected_domain_prefix,
         expected_rds_prefix,
+        expected_redis_prefix,
     ):
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", environment)
         monkeypatch.setenv("CLIENT", "123456")
 
-        rds_prefix, s3_prefix, domain_prefix = make_prefixes()
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
         assert s3_prefix == expected_s3_prefix
         assert domain_prefix == expected_domain_prefix
         assert rds_prefix == expected_rds_prefix
+        assert redis_prefix == expected_redis_prefix
 
         """Test that environment only accepts environment prefix that match environment"""
         metric_data = {
@@ -810,6 +1061,8 @@ class TestLambdaHandler:
                 "",
                 rds_client,
                 expected_rds_prefix,
+                "",
+                "",
                 123456,
             )
 
@@ -819,12 +1072,20 @@ class TestLambdaHandler:
         assert result["Organization GUID"] == "cloudgovtests"
 
     @pytest.mark.parametrize(
-        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix",
+        "environment, expected_s3_prefix, expected_domain_prefix, expected_rds_prefix,expected_redis_prefix",
         [
-            pytest.param("development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
-            pytest.param("staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod"),
             pytest.param(
-                "production", "development-cg-", "cg-broker-dev-", "cg-aws-broker-dev"
+                "development", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd"
+            ),
+            pytest.param(
+                "staging", "cg-", "cg-broker-prd-", "cg-aws-broker-prod", "prd"
+            ),
+            pytest.param(
+                "production",
+                "development-cg-",
+                "cg-broker-dev-",
+                "cg-aws-broker-dev",
+                "dev",
             ),
         ],
     )
@@ -835,15 +1096,17 @@ class TestLambdaHandler:
         expected_s3_prefix,
         expected_domain_prefix,
         expected_rds_prefix,
+        expected_redis_prefix,
     ):
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
         monkeypatch.setenv("ENVIRONMENT", environment)
 
-        rds_prefix, s3_prefix, domain_prefix = make_prefixes()
+        rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
         assert s3_prefix != expected_s3_prefix
         assert domain_prefix != expected_domain_prefix
         assert rds_prefix != expected_rds_prefix
+        assert redis_prefix != expected_redis_prefix
 
         """Test that environment only accepts environment prefix that match environment"""
         metric_data = {
@@ -889,10 +1152,12 @@ class TestLambdaHandler:
                 "",
                 rds_client,
                 expected_rds_prefix,
+                "redis_client",
+                "",
                 123456,
             )
 
-        # if tags are returned environment is correct
+        ## if tags are returned empty environment mismatch does not return tags
         assert result == {}
 
     def test_s3_tag_retrieval(self, monkeypatch):
@@ -940,6 +1205,8 @@ class TestLambdaHandler:
                 "cg-broker-dev",
                 "rds_client",
                 "cg-broker_aws_dev",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -985,6 +1252,8 @@ class TestLambdaHandler:
                 "cg-broker-dev",
                 "rds_client",
                 "cg-broker_aws_dev",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -1034,6 +1303,8 @@ class TestLambdaHandler:
                 "cg-broker",
                 "rds_client",
                 "cg-broker_aws_dev",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -1081,6 +1352,8 @@ class TestLambdaHandler:
                 "cg-broker",
                 "rds_client",
                 "cg-broker_aws_dev",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -1131,6 +1404,8 @@ class TestLambdaHandler:
                 "cg-broker",
                 rds_client,
                 "cg-aws-broker-prod",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -1190,6 +1465,8 @@ class TestLambdaHandler:
                 "cg-broker",
                 rds_client,
                 "cg-aws-broker-prod",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -1238,6 +1515,8 @@ class TestLambdaHandler:
                 "cg-broker",
                 rds_client,
                 "cg-aws-broker-prod",
+                "redis_client",
+                "",
                 123456,
             )
 
@@ -1297,6 +1576,8 @@ class TestLambdaHandler:
                 "cg-broker",
                 rds_client,
                 "cg-aws-broker-prod",
+                "redis_client",
+                "",
                 123456,
             )
 
