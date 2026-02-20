@@ -140,6 +140,13 @@ class TestLambdaHandler:
 
     def test_lambda_handler_many_rds_metric_lines(self, monkeypatch):
         """Test processing multiple metric lines in one record"""
+        
+        # Clear the LRU cache before test
+        from lambda_functions.transform_lambda import get_clients, get_tags_from_arn, get_rds_description
+        get_clients.cache_clear()
+        get_tags_from_arn.cache_clear() 
+        get_rds_description.cache_clear()
+        
         metrics = [
             {
                 "timestamp": 1640995200000,
@@ -178,17 +185,15 @@ class TestLambdaHandler:
                 "unit": "Percent",
             },
         ]
-
+        
         # Create newline-delimited JSON
         ndjson_data = "\n".join([json.dumps(metric) for metric in metrics]) + "\n"
         encoded_data = base64.b64encode(ndjson_data.encode("utf-8")).decode("utf-8")
-
         event = {"records": [{"recordId": "multi-metric-record", "data": encoded_data}]}
-
         context = MagicMock()
+        
         # Create a stubbed rds client
         rds_client = boto3.client("rds", region_name=dummy_region)
-
         stubber = Stubber(rds_client)
         fake_arn = (
             "arn:aws-us-gov:rds:us-gov-west-1:123456:db:cg-aws-broker-prodjasontest"
@@ -201,47 +206,34 @@ class TestLambdaHandler:
             ]
         }
         expected_param_for_stub = {"ResourceName": fake_arn}
-
-        # 1
-        stubber.add_response(
-            "list_tags_for_resource", fake_tags, expected_param_for_stub
-        )
         expected_param_for_describe = {
             "DBInstanceIdentifier": "cg-aws-broker-prodjasontest"
         }
         fake_describe = {"DBInstances": [{"AllocatedStorage": 100}]}
-        # 2
+        
+        # Only stub once per unique call - cache handles the rest
+        stubber.add_response(
+            "list_tags_for_resource", fake_tags, expected_param_for_stub
+        )
         stubber.add_response(
             "describe_db_instances", fake_describe, expected_param_for_describe
         )
-        stubber.add_response(
-            "list_tags_for_resource", fake_tags, expected_param_for_stub
-        )
-        # 3
-        stubber.add_response(
-            "list_tags_for_resource", fake_tags, expected_param_for_stub
-        )
-        # 4
-        stubber.add_response(
-            "list_tags_for_resource", fake_tags, expected_param_for_stub
-        )
+        
         stubber.activate()
-
         monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
         monkeypatch.setenv("ACCOUNT_ID", "123456")
-
+        
         with patch("lambda_functions.transform_lambda.logger"), patch(
             "boto3.client", return_value=rds_client
         ):
             result = lambda_handler(event, context)
-
+        
         assert len(result["records"]) == 1
         assert result["records"][0]["result"] == "Ok"
-
+        
         # Decode and verify multiple metrics
         output_data = base64.b64decode(result["records"][0]["data"]).decode("utf-8")
         output_metrics = [json.loads(line) for line in output_data.strip().split("\n")]
-
         assert len(output_metrics) == 4
         assert "db_size" not in output_metrics[0]["Tags"]
         assert "db_size" in output_metrics[1]["Tags"]
