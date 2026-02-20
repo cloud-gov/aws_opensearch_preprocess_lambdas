@@ -11,15 +11,26 @@ default_keys_to_remove = ["metric_stream_name", "account_id", "region"]
 EXPECTED_NAMESPACES = ["AWS/S3", "AWS/ES", "AWS/RDS", "AWS/ElastiCache"]
 
 
+@lru_cache(maxsize=1)  
+def get_clients(region):
+    return {
+        's3': boto3.client("s3", region_name=region),
+        'es': boto3.client("es", region_name=region),
+        'rds': boto3.client("rds", region_name=region),
+        'elasticache': boto3.client("elasticache", region_name=region)
+    }
+
 def lambda_handler(event, context):
     output_records = []
     region = boto3.Session().region_name or os.environ.get("AWS_REGION")
     rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
     account_id = os.environ.get("ACCOUNT_ID")
-    s3_client = boto3.client("s3", region_name=region)
-    es_client = boto3.client("es", region_name=region)
-    rds_client = boto3.client("rds", region_name=region)
-    redis_client = boto3.client("elasticache", region_name=region)
+    # Get cached clients
+    clients = get_clients(region)
+    s3_client = clients['s3']
+    es_client = clients['es']
+    rds_client = clients['rds']
+    redis_client = clients['elasticache']
     try:
         for record in event["records"]:
             pre_json_value = base64.b64decode(record["data"])
