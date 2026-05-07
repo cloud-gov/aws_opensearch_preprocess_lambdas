@@ -232,7 +232,7 @@ def get_resource_tags_from_metric(
     return tags
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=512)
 def get_rds_description(rds_client, db_name):
     try:
         size = rds_client.describe_db_instances(DBInstanceIdentifier=db_name)
@@ -253,7 +253,7 @@ def get_tags_from_name(name, type, client) -> dict:
     return tags
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=1024)
 def get_tags_from_arn(arn, client) -> dict:
     tags = {}
     if ":domain/" in arn:
