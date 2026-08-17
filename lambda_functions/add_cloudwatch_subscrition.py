@@ -11,12 +11,15 @@ def lambda_handler(event, context):
     logs = boto3.client("logs")
     FIREHOSE_ARN = os.environ["FIREHOSE_ARN"]
     ROLE_ARN = os.environ["ROLE_ARN"]
-    rds_prefix = make_prefixes()
+    rds_prefix, opensearch_prefix = make_prefixes()
     detail = event.get("detail", {})
     params = detail.get("requestParameters", {})
     log_group_name = params.get("logGroupName")
 
-    if log_group_name and log_group_name.startswith(f"/aws/rds/instance/{rds_prefix}"):
+    if log_group_name and (
+        log_group_name.startswith(f"/aws/rds/instance/{rds_prefix}")
+        or log_group_name.startswith(f"/aws/OpenSearchService/domains/{opensearch_prefix}")
+    ):
         filter_name = "firehose_for_opensearch"
         filter_pattern = ""
         try:
@@ -45,14 +48,17 @@ def make_prefixes():
         raise RuntimeError("environment is required")
 
     rds_prefix = "cg-aws-broker-"
+    opensearch_prefix = "cg-broker-"
     environment_suffixes = {
-        "production": "prod",
-        "staging": "stage",
-        "development": "dev",
+        "production": ("prod", "prd"),
+        "staging": ("stage", "stg"),
+        "development": ("dev", "dev"),
     }
     if environment not in environment_suffixes:
         raise RuntimeError(f"environment is invalid: {environment}")
 
-    rds_prefix += environment_suffixes[environment]
+    rds_suffix, opensearch_suffix = environment_suffixes[environment]
+    rds_prefix += rds_suffix
+    opensearch_prefix += opensearch_suffix
 
-    return rds_prefix
+    return rds_prefix, opensearch_suffix
