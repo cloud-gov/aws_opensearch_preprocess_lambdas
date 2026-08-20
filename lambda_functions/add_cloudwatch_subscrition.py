@@ -61,4 +61,4 @@ def make_prefixes():
     rds_prefix += rds_suffix
     opensearch_prefix += opensearch_suffix
 
-    return rds_prefix, opensearch_suffix
+    return rds_prefix, opensearch_prefix
