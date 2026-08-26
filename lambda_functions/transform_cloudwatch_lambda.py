@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
     """
-    This function processes CloudWatch Logs from Firehose, enriches them with RDS tags,
+    This function processes CloudWatch Logs from Firehose, enriches them with tags,
     and stores them in S3.
     """
     output_records = []
@@ -35,11 +35,12 @@ def lambda_handler(event, context):
         if not account_id:
             raise ValueError("ACCOUNT_ID environment variable is required")
 
-        rds_prefix = make_prefixes()  # Fetch prefix based on environment
+        rds_prefix, opensearch_prefix = make_prefixes()  # Fetch prefix based on environment
 
         # Initialize clients
         s3_client = boto3.client("s3", region_name=region)
         rds_client = boto3.client("rds", region_name=region)
+        es_client = boto3.client("es", region_name=region)
 
     except ValueError as e:
         logger.error(f"Configuration error: {str(e)}")
@@ -59,7 +60,7 @@ def lambda_handler(event, context):
                 try:
                     logs = json.loads(line)
                     log_results = process_logs(
-                        logs, rds_client, region, account_id, rds_prefix
+                        logs, rds_client, es_client, region, account_id, rds_prefix, opensearch_prefix
                     )
                     if log_results:
                         processed_logs.extend(log_results)
@@ -130,20 +131,23 @@ def make_prefixes():
         raise RuntimeError("ENVIRONMENT is required")
 
     rds_prefix = "cg-aws-broker-"
+    opensearch_prefix = "cg-broker-"
     environment_suffixes = {
-        "production": "prod",
-        "staging": "stage",
-        "development": "dev",
+        "production": ("prod", "prd"),
+        "staging": ("stage", "stg"),
+        "development": ("dev", "dev"),
     }
 
     if environment not in environment_suffixes:
         raise RuntimeError(f"Invalid ENVIRONMENT: {environment}")
 
-    rds_prefix += environment_suffixes[environment]
-    return rds_prefix
+    rds_suffix, opensearch_suffix = environment_suffixes[environment]
+    rds_prefix += rds_suffix
+    opensearch_prefix += opensearch_suffix
+    return rds_prefix, opensearch_prefix
 
 
-def process_logs(logs, client, region, account_id, rds_prefix):
+def process_logs(logs, rds_client, es_client, region, account_id, rds_prefix, opensearch_prefix):
     """
     Enriches CloudWatch Logs with tags.
     """
@@ -151,7 +155,7 @@ def process_logs(logs, client, region, account_id, rds_prefix):
         return_logs = []
         resource_name = logs["logGroup"].split("/")[4]
         tags = get_resource_tags_from_log(
-            resource_name, client, region, account_id, rds_prefix
+            resource_name, rds_client, es_client, region, account_id, rds_prefix, opensearch_prefix
         )
 
         if len(tags.keys()) > 0:
@@ -174,16 +178,21 @@ def process_logs(logs, client, region, account_id, rds_prefix):
 
 
 def get_resource_tags_from_log(
-    resource_name, client, region, account_id, rds_prefix
+    resource_name, rds_client, es_client, region, account_id, rds_prefix, opensearch_prefix
 ) -> dict:
     """
     Retrieves tags from an instance based on its ARN.
     """
     tags = {}
     try:
-        if resource_name is not None and resource_name.startswith(rds_prefix):
+        if resource_name is None:
+            return tags
+        if resource_name.startswith(rds_prefix):
             arn = f"arn:aws-us-gov:rds:{region}:{account_id}:db:{resource_name}"
-            tags = get_tags_from_arn(arn, client)
+            tags = get_tags_from_arn(arn, rds_client)
+        elif resource_name.startswith(opensearch_prefix):
+            arn = f"arn:aws-us-gov:es:{region}:{account_id}:domain/{resource_name}"
+            tags = get_tags_from_arn(arn, es_client)
     except Exception as e:
         logger.error(f"Error getting tags for resource {resource_name}: {e}")
     return tags
@@ -198,6 +207,15 @@ def get_tags_from_arn(arn, client) -> dict:
     if ":db:" in arn:
         try:
             response = client.list_tags_for_resource(ResourceName=arn)
+            tags = {tag["Key"]: tag["Value"] for tag in response.get("TagList", [])}
+            if "Organization GUID" not in tags:
+                logger.warning(f"Organization GUID tag missing for ARN: {arn}")
+                return {}
+        except Exception as e:
+            logger.error(f"Could not fetch tags for ARN {arn}: {e}")
+    if ":domain/" in arn:
+        try:
+            response = client.list_tags(ARN=arn)
             tags = {tag["Key"]: tag["Value"] for tag in response.get("TagList", [])}
             if "Organization GUID" not in tags:
                 logger.warning(f"Organization GUID tag missing for ARN: {arn}")
