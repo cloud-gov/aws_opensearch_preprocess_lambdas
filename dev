@@ -61,11 +61,13 @@ update_requirements() {
     pip-tools/dev-requirements.in
 }
 
+PIP_VERSION="26.1.2"
+
 set_up_ci_environment () {
   python3 -m venv venv
   # we need to update pip because the version from apt is too old, and breaks
   # when we try to install from requirements files later
-  ${python} -m pip install --upgrade pip
+  ${python} -m pip install --upgrade "pip==${PIP_VERSION}"
   # do this first to make sure we have piptools
   ${python} -m pip install -r dev-requirements.txt
   # do this again for syncs that might involve deletions
@@ -75,6 +77,7 @@ set_up_ci_environment () {
 set_up_environment () {
   python -m venv venv
   source venv/bin/activate
+  ${python} -m pip install --trusted-host pypi.org --upgrade "pip==${PIP_VERSION}"
   # do this first to make sure we have piptools
   ${python} -m pip install --trusted-host pypi.org -r dev-requirements.txt
   # do this again for syncs that might involve deletions
