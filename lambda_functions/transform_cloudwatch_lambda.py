@@ -1,11 +1,11 @@
 import boto3
 import gzip
+import hashlib
 import io
 import json
 import os
 import logging
 import re
-import uuid
 from collections import defaultdict
 from datetime import datetime
 from functools import lru_cache
@@ -65,21 +65,43 @@ def guid_segment(value, tag, fallback, source):
     return value
 
 
-def build_key(partition, name_prefix, request_id=None, now=None):
+def batch_time(entries):
+    """
+    Returns the datetime for a batch's date prefix, taken from the newest entry
+    timestamp (epoch ms) so the key does not depend on when the Lambda ran.
+    Falls back to now if no entry carries a usable timestamp.
+    """
+    stamps = [
+        e.get("timestamp")
+        for e in entries
+        if isinstance(e.get("timestamp"), (int, float))
+        and not isinstance(e.get("timestamp"), bool)
+    ]
+    if not stamps:
+        logger.warning("No usable timestamp in batch; date prefix will not be stable")
+        return datetime.now()
+    return datetime.fromtimestamp(max(stamps) / 1000)
+
+
+def body_digest(raw):
+    """
+    Returns the key suffix for a batch body. Content-addressed so that a retry
+    of the same batch overwrites its object instead of adding a duplicate.
+    """
+    return hashlib.sha256(raw).hexdigest()[:32]
+
+
+def build_key(partition, name_prefix, digest, written_at):
     """
     Builds the S3 key for one partition:
 
-        orgs/<org>/<space>/<YYYY>/<MM>/<DD>/<HH>/<name_prefix>-<epoch>-<suffix>.json.gz
+        orgs/<org>/<space>/<YYYY>/<MM>/<DD>/<HH>/<name_prefix>-<epoch>-<digest>.json.gz
 
     A bad org GUID goes to unknown-org/ instead, so everything under orgs/ is a
-    real org. The suffix keeps concurrent invocations from overwriting each other.
+    real org. Every component derives from the batch content, so the key is
+    stable across retries.
     """
     org_guid, space_guid = partition
-    if request_id is not None and SAFE_KEY_SEGMENT.fullmatch(str(request_id)):
-        suffix = str(request_id)
-    else:
-        suffix = uuid.uuid4().hex
-    written_at = now or datetime.now()
     date_path = written_at.strftime("%Y/%m/%d/%H")
     epoch = int(written_at.timestamp())
     if org_guid == UNKNOWN_ORG_PARTITION:
@@ -87,60 +109,52 @@ def build_key(partition, name_prefix, request_id=None, now=None):
     else:
         prefix = f"{ORG_KEY_NAMESPACE}/{org_guid}"
     return (
-        f"{prefix}/{space_guid}/{date_path}/" f"{name_prefix}-{epoch}-{suffix}.json.gz"
+        f"{prefix}/{space_guid}/{date_path}/" f"{name_prefix}-{epoch}-{digest}.json.gz"
     )
 
 
-def put_partition(
-    s3_client, bucket, partition, entries, name_prefix="batch", request_id=None
-):
+def put_partition(s3_client, bucket, partition, entries, name_prefix="batch"):
     """
     Writes one gzipped NDJSON object for a single partition.
     """
-    try:
-        buffer = io.BytesIO()
-        with gzip.GzipFile(fileobj=buffer, mode="wb") as gz_file:
-            for entry in entries:
-                gz_file.write((json.dumps(entry) + "\n").encode("utf-8"))
-        compressed_data = buffer.getvalue()
-        s3_key = build_key(partition, name_prefix, request_id)
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=s3_key,
-            Body=compressed_data,
-            ContentType="application/gzip",
-            ContentEncoding="gzip",
-            ServerSideEncryption="AES256",
-        )
-        logger.info(f"Successfully pushed {len(entries)} records to S3: {s3_key}")
-    except Exception as e:
-        logger.error(f"Unexpected error pushing to S3: {str(e)}")
-        raise e
+    raw = b"".join((json.dumps(entry) + "\n").encode("utf-8") for entry in entries)
+    buffer = io.BytesIO()
+    # mtime=0 keeps the compressed bytes identical for identical input.
+    with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as gz_file:
+        gz_file.write(raw)
+    s3_key = build_key(partition, name_prefix, body_digest(raw), batch_time(entries))
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=s3_key,
+        Body=buffer.getvalue(),
+        ContentType="application/gzip",
+        ContentEncoding="gzip",
+        ServerSideEncryption="AES256",
+    )
+    logger.info(f"Successfully pushed {len(entries)} records to S3: {s3_key}")
+    return s3_key
 
 
-def put_all_partitions(s3_client, bucket, groups, name_prefix="batch", request_id=None):
+def put_all_partitions(s3_client, bucket, groups, name_prefix="batch"):
     """
-    Writes one object per partition, in a stable order.
+    Writes one object per partition.
+
+    Every partition is attempted even if an earlier one fails, so a single bad
+    partition cannot strand the others. If any failed, raises afterwards so the
+    caller fails the batch and Firehose retries it; keys are content-addressed,
+    so re-writing the partitions that already succeeded is a no-op.
     """
+    failed = []
     for partition, entries in sorted(groups.items()):
-        put_partition(
-            s3_client,
-            bucket,
-            partition,
-            entries,
-            name_prefix=name_prefix,
-            request_id=request_id,
+        try:
+            put_partition(s3_client, bucket, partition, entries, name_prefix)
+        except Exception as e:
+            logger.error("Failed to push partition %s to S3: %s", partition, str(e))
+            failed.append(partition)
+    if failed:
+        raise RuntimeError(
+            f"Failed to push {len(failed)} of {len(groups)} partitions to S3: {failed}"
         )
-
-
-def request_id_from(context):
-    """
-    Returns the Lambda request ID, or None if it is unusable as a key segment.
-    """
-    request_id = getattr(context, "aws_request_id", None)
-    if isinstance(request_id, str) and SAFE_KEY_SEGMENT.fullmatch(request_id):
-        return request_id
-    return None
 
 
 # --- END shared org partitioning ---
@@ -190,45 +204,48 @@ def lambda_handler(event, context):
 
             processed_logs = []
             for line in pre_json_value.strip().splitlines():
-                try:
-                    logs = json.loads(line)
-                    log_results = process_logs(
-                        logs, rds_client, region, account_id, rds_prefix
-                    )
-                    if log_results:
-                        processed_logs.extend(log_results)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Error decoding JSON: {e}. Line: {line}")
-                    continue  # Skip to the next line if JSON decoding fails
-            if processed_logs:
-                for log in processed_logs:
-                    s3_output[partition_for_log(log)].append(log)
+                logs = json.loads(line)
+                log_results = process_logs(
+                    logs, rds_client, region, account_id, rds_prefix
+                )
+                if log_results:
+                    processed_logs.extend(log_results)
+        except Exception as e:
+            # Hand the record back for Firehose to write to error_output_prefix
+            # rather than failing the whole batch.
+            logger.error(
+                "Error processing record %s: %s", record.get("recordId"), str(e)
+            )
+            output_records.append(
+                {
+                    "recordId": record["recordId"],
+                    "result": "ProcessingFailed",
+                    "data": record["data"],
+                }
+            )
+            continue
 
-                # Mark the record as successfully processed (but data is now in S3)
-                output_record = {
+        if processed_logs:
+            for log in processed_logs:
+                s3_output[partition_for_log(log)].append(log)
+
+            # Mark the record as successfully processed (but data is now in S3)
+            output_records.append(
+                {
                     "recordId": record["recordId"],
                     "result": "Ok",
                     "data": base64.b64encode(b"").decode("utf-8"),  # Empty data
                 }
-                output_records.append(output_record)
-            else:
-                # Mark the record as dropped if no logs were processed
-                output_record = {
+            )
+        else:
+            # Mark the record as dropped if no logs were processed
+            output_records.append(
+                {
                     "recordId": record["recordId"],
                     "result": "Dropped",
                     "data": record["data"],
                 }
-                output_records.append(output_record)
-
-        except Exception as e:
-            logger.error(f"Error processing record {record['recordId']}: {str(e)}")
-            # Consider marking the record as failed, or attempt to re-queue it.
-            output_record = {
-                "recordId": record["recordId"],
-                "result": "ProcessingFailed",
-                "data": record["data"],  # Keep original data for retry
-            }
-            output_records.append(output_record)
+            )
 
     # One object per org/space partition.
     put_all_partitions(
@@ -236,7 +253,6 @@ def lambda_handler(event, context):
         bucket,
         s3_output,
         name_prefix=LOG_BATCH_PREFIX,
-        request_id=request_id_from(context),
     )
     return {"records": output_records}
 

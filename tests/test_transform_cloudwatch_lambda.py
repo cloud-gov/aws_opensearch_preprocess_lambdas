@@ -131,6 +131,143 @@ class TestLambdaHandler:
         assert len(result["records"]) == 1
         assert result["records"][0]["result"] == "Ok"
 
+    def test_lambda_handler_malformed_line(self, monkeypatch):
+        """A malformed line fails its record rather than being skipped"""
+        malformed = b'{"messageType": "DATA_MESSAGE"'  # Not valid JSON
+        compressed_data = gzip.compress(malformed)
+        encoded_data = base64.b64encode(compressed_data).decode("utf-8")
+        event = {"records": [{"recordId": "malformed-record", "data": encoded_data}]}
+
+        context = MagicMock()
+        monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
+        monkeypatch.setenv("ACCOUNT_ID", "123456")
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
+
+        mock_s3_client = MagicMock()
+        mock_s3_client.put_object.return_value = {}
+
+        with patch(
+            "lambda_functions.transform_cloudwatch_lambda.logger"
+        ) as mock_logger, patch("boto3.client", return_value=mock_s3_client):
+            result = lambda_handler(event, context)
+
+        # Firehose routes this to error_output_prefix, and the original data
+        # has to come back for it to be written there.
+        assert len(result["records"]) == 1
+        assert result["records"][0]["recordId"] == "malformed-record"
+        assert result["records"][0]["result"] == "ProcessingFailed"
+        assert result["records"][0]["data"] == encoded_data
+        mock_s3_client.put_object.assert_not_called()
+        mock_logger.error.assert_called()
+
+    def test_lambda_handler_does_not_half_deliver_a_record(self, monkeypatch):
+        """
+        A record with a good line and a bad line must not deliver the good one.
+
+        Firehose statuses are per record, so a half-delivered record would be
+        both written to S3 and written to error_output_prefix, with no way to
+        tell the two copies apart.
+        """
+        log_data = {
+            "messageType": "DATA_MESSAGE",
+            "owner": "12345678910",
+            "logGroup": "/aws/rds/instance/cg-aws-broker-devtest/postgresql",
+            "logStream": "cg-aws-broker-devtest.0",
+            "subscriptionFilters": ["testing"],
+            "logEvents": [
+                {
+                    "id": "12345678912345678901234567890123456789123456789012345670",
+                    "timestamp": 1759774467000,
+                    "message": "This is a test",
+                },
+            ],
+        }
+        mock_tags = {"Environment": "production", "Owner": "team-alpha"}
+
+        body = json.dumps(log_data) + "\n" + '{"messageType": "DATA_MESSAGE"' + "\n"
+        compressed_data = gzip.compress(body.encode("utf-8"))
+        encoded_data = base64.b64encode(compressed_data).decode("utf-8")
+        event = {"records": [{"recordId": "half-bad", "data": encoded_data}]}
+
+        context = MagicMock()
+        monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
+        monkeypatch.setenv("ACCOUNT_ID", "123456")
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
+
+        mock_s3_client = MagicMock()
+        mock_s3_client.put_object.return_value = {}
+
+        with patch("lambda_functions.transform_cloudwatch_lambda.logger"), patch(
+            "lambda_functions.transform_cloudwatch_lambda.get_resource_tags_from_log",
+            return_value=mock_tags,
+        ), patch("boto3.client", return_value=mock_s3_client):
+            result = lambda_handler(event, context)
+
+        assert result["records"][0]["result"] == "ProcessingFailed"
+        mock_s3_client.put_object.assert_not_called()
+
+    def test_one_bad_record_does_not_fail_the_good_ones(self, monkeypatch):
+        """A single malformed record must not cost the rest of the batch"""
+        log_data = {
+            "messageType": "DATA_MESSAGE",
+            "owner": "12345678910",
+            "logGroup": "/aws/rds/instance/cg-aws-broker-devtest/postgresql",
+            "logStream": "cg-aws-broker-devtest.0",
+            "subscriptionFilters": ["testing"],
+            "logEvents": [
+                {
+                    "id": "12345678912345678901234567890123456789123456789012345670",
+                    "timestamp": 1759774467000,
+                    "message": "This is a test",
+                },
+            ],
+        }
+        mock_tags = {"Environment": "production", "Owner": "team-alpha"}
+
+        good_data = base64.b64encode(
+            gzip.compress((json.dumps(log_data) + "\n").encode("utf-8"))
+        ).decode("utf-8")
+        bad_data = base64.b64encode(
+            gzip.compress(b'{"messageType": "DATA_MESSAGE"')
+        ).decode("utf-8")
+
+        event = {
+            "records": [
+                {"recordId": "good-1", "data": good_data},
+                {"recordId": "bad-1", "data": bad_data},
+                {"recordId": "good-2", "data": good_data},
+            ]
+        }
+
+        context = MagicMock()
+        monkeypatch.setenv("AWS_REGION", "us-gov-west-1")
+        monkeypatch.setenv("ACCOUNT_ID", "123456")
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("S3_BUCKET_NAME", "test-bucket")
+
+        mock_s3_client = MagicMock()
+        mock_s3_client.put_object.return_value = {}
+
+        with patch("lambda_functions.transform_cloudwatch_lambda.logger"), patch(
+            "lambda_functions.transform_cloudwatch_lambda.get_resource_tags_from_log",
+            return_value=mock_tags,
+        ), patch("boto3.client", return_value=mock_s3_client):
+            result = lambda_handler(event, context)
+
+        results = {r["recordId"]: r["result"] for r in result["records"]}
+        assert results == {
+            "good-1": "Ok",
+            "bad-1": "ProcessingFailed",
+            "good-2": "Ok",
+        }
+
+        # The two good records still reached S3
+        mock_s3_client.put_object.assert_called_once()
+        body = gzip.decompress(mock_s3_client.put_object.call_args[1]["Body"])
+        assert len(body.decode("utf-8").strip().splitlines()) == 2
+
     @pytest.mark.parametrize(
         "environment, expected_rds_prefix",
         [
