@@ -52,9 +52,7 @@ Notable behaviors:
   record its org prefix.
 - Records whose org GUID is missing, or whose value is not safe to interpolate
   into an S3 key, are still delivered — under the top-level `unknown-org/` prefix —
-  so a bad tag never silently discards data. Note that S3 and ES metrics do not
-  require the tag (unlike RDS and ElastiCache), so untagged buckets and domains
-  will accumulate here.
+  so a bad tag never silently discards data.
 - Only the exact reserved value is special-cased. An org GUID that merely
   resembles it (`unknown-org-2`) is treated as a real org and stays under `orgs/`.
 - The metric transform uses the `metrics-` object prefix and the log transform
