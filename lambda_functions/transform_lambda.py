@@ -27,7 +27,6 @@ METRIC_BATCH_PREFIX = "metrics"
 ORG_GUID_TAG = "Organization GUID"
 SPACE_GUID_TAG = "Space GUID"
 
-# Tag values are interpolated into an S3 key, so allowlist them.
 SAFE_KEY_SEGMENT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 UNKNOWN_ORG_PARTITION = "unknown-org"
