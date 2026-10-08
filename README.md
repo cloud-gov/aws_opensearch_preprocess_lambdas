@@ -112,7 +112,7 @@ records those discards.
 - **Log Filtering**: Ensures sensitive information is filtered from log entries before processing
 - **Format Compatibility**: Verifies log data is formatted correctly for OpenSearch ingestion
 - **Tag Enrichment**: Tests that appropriate resource tags are successfully attached to metrics
-- **Org/Space Partitioning**: Confirms logs from different orgs land in separate org-prefixed objects
+- **Org/Space Partitioning**: Confirms the `Space GUID` tag reaches both the S3 key and the indexed document, that distinct orgs and spaces split into separate objects, and that a missing space tag still lands under its real org prefix
 - **Per-record failure handling**: Confirms a malformed line returns `ProcessingFailed` with its original data, that a record with one good and one bad line is not half-delivered, and that one bad record does not cost the good records in the same batch
 
 
