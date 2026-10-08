@@ -16,43 +16,29 @@ logger.setLevel(logging.INFO)
 default_keys_to_remove = ["metric_stream_name", "account_id", "region"]
 EXPECTED_NAMESPACES = ["AWS/S3", "AWS/ES", "AWS/RDS", "AWS/ElastiCache"]
 
-# Object name prefix for metric batches, distinct from the log transform's so
-# the two Lambdas cannot be confused if they share a bucket.
 METRIC_BATCH_PREFIX = "metrics"
 
 
 # --- BEGIN shared org partitioning ---
-# Duplicated verbatim in transform_lambda.py and transform_cloudwatch_lambda.py:
-# each Lambda is deployed as a standalone .py file, so there is no shared module
-# to import at runtime. tests/test_org_partition_parity.py fails if the copies
-# drift, so apply edits to BOTH files.
+# Duplicated verbatim in the other transform lambda. Apply every edit to both.
 
-# Tags holding the org and space identifiers used as the S3 partition.
+# Tag names must match cf-tags.conf, which renames them to @cf.org_id and
+# @cf.space_id downstream.
 ORG_GUID_TAG = "Organization GUID"
-SPACE_GUID_TAG = "Space_GUID"
+SPACE_GUID_TAG = "Space GUID"
 
-# Tag values are external input interpolated into an S3 key, so they are
-# validated against an allowlist rather than a denylist (AGENTS.md 5.1).
+# Tag values are interpolated into an S3 key, so allowlist them.
 SAFE_KEY_SEGMENT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
-# Fallbacks for a missing or unsafe GUID, so a bad tag never discards data.
-# A bad org lands at the top level, keeping orgs/ free of anything that is not a
-# real org GUID; a bad space only demotes the space level.
 UNKNOWN_ORG_PARTITION = "unknown-org"
 UNKNOWN_SPACE_PARTITION = "unknown-space"
-
-# Top-level namespace for real org GUIDs, so per-org data cannot collide with
-# another top-level prefix in the bucket.
 ORG_KEY_NAMESPACE = "orgs"
 
 
 def partition_for(entry, source=None):
     """
-    Returns the (org, space) S3 partition for one enriched record.
-
-    `source` only names the record in warnings; it never reaches the S3 key.
-    Each level falls back independently, so a bad space does not cost the record
-    its org prefix.
+    Returns the (org, space) S3 partition for one enriched record. `source` only
+    names the record in warnings.
     """
     tags = entry.get("Tags", {})
     return (
@@ -67,8 +53,7 @@ def partition_for(entry, source=None):
 
 def guid_segment(value, tag, fallback, source):
     """
-    Validates one tag value for use as a single S3 key segment, returning
-    `fallback` (and warning) when it is missing or unsafe.
+    Returns a tag value safe to use as one S3 key segment, else `fallback`.
     """
     if not value:
         logger.warning(
@@ -85,22 +70,12 @@ def guid_segment(value, tag, fallback, source):
 
 def build_key(partition, name_prefix, request_id=None, now=None):
     """
-    Builds the S3 key for one (org, space) partition's object:
+    Builds the S3 key for one partition:
 
-        orgs/<org-guid>/<space-guid>/<YYYY>/<MM>/<DD>/<HH>/<name_prefix>-<epoch>-<suffix>.json.gz
+        orgs/<org>/<space>/<YYYY>/<MM>/<DD>/<HH>/<name_prefix>-<epoch>-<suffix>.json.gz
 
-    The unknown-org fallback is deliberately NOT nested under orgs/, so that
-    everything under orgs/ is a real org GUID:
-
-        unknown-org/<space-guid>/<YYYY>/<MM>/<DD>/<HH>/<name_prefix>-<epoch>-<suffix>.json.gz
-
-    The space level is always present, so the segment after the org is never
-    mistaken for a date.
-
-    The suffix exists because a timestamp alone is not unique: two concurrent
-    invocations writing the same partition in the same second would otherwise
-    resolve to the same key and one would overwrite the other. Uses the Lambda
-    request ID when safe, else a random value.
+    A bad org GUID goes to unknown-org/ instead, so everything under orgs/ is a
+    real org. The suffix keeps concurrent invocations from overwriting each other.
     """
     org_guid, space_guid = partition
     if request_id is not None and SAFE_KEY_SEGMENT.fullmatch(str(request_id)):
@@ -123,7 +98,7 @@ def put_partition(
     s3_client, bucket, partition, entries, name_prefix="batch", request_id=None
 ):
     """
-    Writes one gzipped NDJSON object for a single (org, space) partition.
+    Writes one gzipped NDJSON object for a single partition.
     """
     try:
         buffer = io.BytesIO()
@@ -148,7 +123,7 @@ def put_partition(
 
 def put_all_partitions(s3_client, bucket, groups, name_prefix="batch", request_id=None):
     """
-    Writes one object per (org, space) partition, in a stable order.
+    Writes one object per partition, in a stable order.
     """
     for partition, entries in sorted(groups.items()):
         put_partition(
@@ -163,8 +138,7 @@ def put_all_partitions(s3_client, bucket, groups, name_prefix="batch", request_i
 
 def request_id_from(context):
     """
-    Returns the Lambda request ID, or None when the context has no usable
-    string ID, in which case build_key falls back to a random suffix.
+    Returns the Lambda request ID, or None if it is unusable as a key segment.
     """
     request_id = getattr(context, "aws_request_id", None)
     if isinstance(request_id, str) and SAFE_KEY_SEGMENT.fullmatch(request_id):
@@ -187,8 +161,7 @@ def get_clients(region):
 
 def partition_for_metric(metric):
     """
-    Returns the (org, space) S3 partition for an enriched metric, naming the
-    metric in any warning so a bad tag is actionable.
+    Returns the (org, space) S3 partition for an enriched metric.
     """
     return partition_for(
         metric, f"{metric.get('namespace')}/{metric.get('metric_name')}"
@@ -197,16 +170,13 @@ def partition_for_metric(metric):
 
 def lambda_handler(event, context):
     output_records = []
-    # (org GUID, space GUID) -> enriched metrics for that partition, accumulated
-    # across every input record so each org/space gets one object per invocation.
+    # (org, space) -> metrics for that partition, accumulated across all records
     s3_output = defaultdict(list)
     region = boto3.Session().region_name or os.environ.get("AWS_REGION")
     rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
     account_id = os.environ.get("ACCOUNT_ID")
     bucket = os.environ.get("S3_BUCKET_NAME")
     if not bucket:
-        # Fail closed: metrics are no longer returned inline, so without a
-        # destination they would be silently discarded.
         logger.error("S3_BUCKET_NAME environment variable not set.")
         raise ValueError("S3_BUCKET_NAME environment variable must be set.")
     # Get cached clients
@@ -263,7 +233,7 @@ def lambda_handler(event, context):
         logger.error(f"Error processing metrics: {str(e)}")
         raise e
 
-    # Push the metrics to S3, one object per org/space partition.
+    # One object per org/space partition.
     put_all_partitions(
         s3_client,
         bucket,
