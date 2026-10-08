@@ -25,8 +25,6 @@ LOG_BATCH_PREFIX = "batch"
 ORG_GUID_TAG = "Organization GUID"
 SPACE_GUID_TAG = "Space GUID"
 
-# Tag values are external input interpolated into an S3 key, so they are
-# validated against an allowlist rather than a denylist (AGENTS.md 5.1).
 SAFE_KEY_SEGMENT = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 UNKNOWN_ORG_PARTITION = "unknown-org"
