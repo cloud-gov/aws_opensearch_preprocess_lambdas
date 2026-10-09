@@ -34,17 +34,22 @@ the top level instead, keeping the reserved fallback out of `orgs/`:
 s3://<bucket>/unknown-org/<space-guid>/<YYYY>/<MM>/<DD>/<HH>/<prefix>-<epoch>-<request-id>.json.gz
 ```
 
-Each Lambda is deployed as a standalone `.py` file loaded directly from source, so
-the two cannot import a shared module at runtime. The partitioning logic is instead
-duplicated verbatim in both files, fenced between these markers:
+Each Lambda is deployed as a flat set of `.py` files at the root of its zip, so
+the partitioning logic lives in a single shared module, `org_partitioning.py`,
+which both transform Lambdas import as a top-level module:
 
 ```python
-# --- BEGIN shared org partitioning ---
-# --- END shared org partitioning ---
+from org_partitioning import ORG_GUID_TAG, partition_for, put_all_partitions
 ```
 
-**When you change anything inside those markers, apply the identical change to both
-files.** Nothing enforces this, so a one-sided edit diverges silently.
+**The Terraform that builds each zip must package `org_partitioning.py` alongside
+the handler.** It is listed as a second `source` block in the `archive_file` for
+both the `metrics_s3_ingestor` and `cloudwatch_s3_ingestor` modules. A zip
+missing it fails at import time, before the handler ever runs.
+
+The tests import the handlers as `lambda_functions.<handler>`, which does not put
+`lambda_functions/` on `sys.path`. The root `conftest.py` adds it, so the same
+import spelling works both under pytest and in the deployed Lambda.
 
 Notable behaviors:
 
