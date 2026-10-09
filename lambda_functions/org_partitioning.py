@@ -106,9 +106,9 @@ def build_key(partition, name_prefix, digest, written_at):
         prefix = UNKNOWN_ORG_PARTITION
     else:
         prefix = f"{ORG_KEY_NAMESPACE}/{org_guid}"
-    return (
-        f"{prefix}/{space_guid}/{date_path}/" f"{name_prefix}-{epoch}-{digest}.json.gz"
-    )
+    key_path =  f"{prefix}/{space_guid}/{date_path}/"
+    name = f"{name_prefix}-{epoch}-{digest}.json.gz"
+    return key_path + name
 
 
 def put_partition(s3_client, bucket, partition, entries, name_prefix="batch"):
