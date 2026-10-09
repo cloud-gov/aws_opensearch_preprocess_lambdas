@@ -3,12 +3,18 @@ import base64
 import boto3
 import logging
 import os
+from collections import defaultdict
 from functools import lru_cache
+
+
+from org_partitioning import ORG_GUID_TAG, partition_for, put_all_partitions
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 default_keys_to_remove = ["metric_stream_name", "account_id", "region"]
 EXPECTED_NAMESPACES = ["AWS/S3", "AWS/ES", "AWS/RDS", "AWS/ElastiCache"]
+
+METRIC_BATCH_PREFIX = "metrics"
 
 
 @lru_cache(maxsize=1)
@@ -21,19 +27,34 @@ def get_clients(region):
     }
 
 
+def partition_for_metric(metric):
+    """
+    Returns the (org, space) S3 partition for an enriched metric.
+    """
+    return partition_for(
+        metric, f"{metric.get('namespace')}/{metric.get('metric_name')}"
+    )
+
+
 def lambda_handler(event, context):
     output_records = []
+    # (org, space) -> metrics for that partition, accumulated across all records
+    s3_output = defaultdict(list)
     region = boto3.Session().region_name or os.environ.get("AWS_REGION")
     rds_prefix, s3_prefix, domain_prefix, redis_prefix = make_prefixes()
     account_id = os.environ.get("ACCOUNT_ID")
+    bucket = os.environ.get("S3_BUCKET_NAME")
+    if not bucket:
+        logger.error("S3_BUCKET_NAME environment variable not set.")
+        raise ValueError("S3_BUCKET_NAME environment variable must be set.")
     # Get cached clients
     clients = get_clients(region)
     s3_client = clients["s3"]
     es_client = clients["es"]
     rds_client = clients["rds"]
     redis_client = clients["elasticache"]
-    try:
-        for record in event["records"]:
+    for record in event["records"]:
+        try:
             pre_json_value = base64.b64decode(record["data"])
             processed_metrics = []
             for line in pre_json_value.strip().splitlines():
@@ -56,43 +77,57 @@ def lambda_handler(event, context):
                 if metric_results is not None:
                     metric_results["dimensions"].pop("ClientId", None)
                     processed_metrics.append(metric_results)
+        except Exception as e:
+            # Hand the record back for Firehose to write to error_output_prefix
+            # rather than failing the whole batch.
+            logger.error(
+                "Error processing record %s: %s", record.get("recordId"), str(e)
+            )
+            output_records.append(
+                {
+                    "recordId": record["recordId"],
+                    "result": "ProcessingFailed",
+                    "data": record["data"],
+                }
+            )
+            continue
 
-            if processed_metrics:
-                # Create newline-delimited JSON (no compression)
-                output_data = (
-                    "\n".join([json.dumps(metric) for metric in processed_metrics])
-                    + "\n"
-                )
+        if processed_metrics:
+            for metric in processed_metrics:
+                s3_output[partition_for_metric(metric)].append(metric)
 
-                # Just base64 encode for Firehose transport (no gzip)
-                encoded_output = base64.b64encode(output_data.encode("utf-8")).decode(
-                    "utf-8"
-                )
-
-                output_record = {
+            # Mark the record as successfully processed (but data is now in S3)
+            output_records.append(
+                {
                     "recordId": record["recordId"],
                     "result": "Ok",
-                    "data": encoded_output,
+                    "data": base64.b64encode(b"").decode("utf-8"),  # Empty data
                 }
-                output_records.append(output_record)
-            else:
-                output_record = {
+            )
+        else:
+            output_records.append(
+                {
                     "recordId": record["recordId"],
                     "result": "Dropped",
                     "data": record["data"],
                 }
-                output_records.append(output_record)
-            logger.info(f"Processed record with {len(processed_metrics)} metrics")
-    except Exception as e:
-        logger.error(f"Error processing metrics: {str(e)}")
-        raise e
+            )
+        logger.info(f"Processed record with {len(processed_metrics)} metrics")
+
+    # One object per org/space partition.
+    put_all_partitions(
+        s3_client,
+        bucket,
+        s3_output,
+        name_prefix=METRIC_BATCH_PREFIX,
+    )
     return {"records": output_records}
 
 
 def make_prefixes():
     environment = os.getenv("ENVIRONMENT")
     if not environment:
-        RuntimeError("environment is required")
+        raise RuntimeError("ENVIRONMENT is required")
     # Prefix setup zone
     s3_prefix = (
         f"{environment}-cg-" if environment in ["development", "staging"] else "cg-"
@@ -266,7 +301,7 @@ def get_tags_from_arn(arn, client) -> dict:
         try:
             response = client.list_tags_for_resource(ResourceName=arn)
             tags = {tag["Key"]: tag["Value"] for tag in response.get("TagList", [])}
-            if "Organization GUID" not in tags:
+            if ORG_GUID_TAG not in tags:
                 return {}
         except Exception as e:
             logger.error(f"Could not fetch tags: {e}")
@@ -275,7 +310,7 @@ def get_tags_from_arn(arn, client) -> dict:
             response = client.list_tags_for_resource(ResourceName=arn)
             tags = {tag["Key"]: tag["Value"] for tag in response.get("TagList", [])}
 
-            if "Organization GUID" not in tags:
+            if ORG_GUID_TAG not in tags:
                 return {}
         except Exception as e:
             logger.error("Could not fetch tags for ARN %s: %s", arn, str(e))

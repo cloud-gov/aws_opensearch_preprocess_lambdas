@@ -18,7 +18,9 @@ def lambda_handler(event, context):
 
     if log_group_name and (
         log_group_name.startswith(f"/aws/rds/instance/{rds_prefix}")
-        or log_group_name.startswith(f"/aws/OpenSearchService/domains/{opensearch_prefix}")
+        or log_group_name.startswith(
+            f"/aws/OpenSearchService/domains/{opensearch_prefix}"
+        )
     ):
         filter_name = "firehose_for_opensearch"
         filter_pattern = ""

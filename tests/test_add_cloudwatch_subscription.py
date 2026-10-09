@@ -10,6 +10,7 @@ from lambda_functions.add_cloudwatch_subscrition import lambda_handler, make_pre
 
 dummy_region = "us-gov-west-1"
 
+
 def create_log_group_event(log_group_name):
     return {
         "version": "0",
@@ -49,9 +50,7 @@ def create_log_group_event(log_group_name):
             "awsRegion": "us-gov-west-1",
             "sourceIPAddress": "rds.amazonaws.com",
             "userAgent": "rds.amazonaws.com",
-            "requestParameters": {
-                "logGroupName": log_group_name
-            },
+            "requestParameters": {"logGroupName": log_group_name},
             "responseElements": "null",
             "requestID": "5ac65be0-b8e0-42d5-91a6-a92b168d1729",
             "eventID": "ad11e4b2-e73b-48f3-8f59-227281cfa891",
@@ -64,6 +63,7 @@ def create_log_group_event(log_group_name):
         },
     }
 
+
 def expected_filter_params(log_group_name):
     return {
         "logGroupName": log_group_name,
@@ -72,6 +72,7 @@ def expected_filter_params(log_group_name):
         "destinationArn": "fireexample",
         "roleArn": "roleexample",
     }
+
 
 class TestCloudwatchLambdaHandler:
 
@@ -99,11 +100,13 @@ class TestCloudwatchLambdaHandler:
             with patch("boto3.client", return_value=real_logs_client):
                 with stubber:
                     lambda_handler(test_data, context)
-    
+
     def test_lambda_handler_opensearch_broker_logs(self, monkeypatch):
         """Test logs from broker"""
         # Sample cloudtrail data
-        test_data = create_log_group_event("/aws/OpenSearchService/domains/cg-broker-test/audit-logs")
+        test_data = create_log_group_event(
+            "/aws/OpenSearchService/domains/cg-broker-test/audit-logs"
+        )
 
         context = MagicMock()
 
